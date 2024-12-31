@@ -53,7 +53,8 @@ public class FileService {
                 // 提交到线程池处理当前块的数据
                 executor.submit(() -> {
                     try {
-                        byte[] encryptedChunk = encryptService.encrypt(chunk);
+                        byte[] compressedData = GzipCompress(chunk);
+                        byte[] encryptedChunk = encryptService.encryptBytes(compressedData);
                     } catch (NoSuchAlgorithmException | NoSuchPaddingException | InvalidKeyException |
                              IllegalBlockSizeException | BadPaddingException e) {
                         throw new RuntimeException(e);
@@ -70,12 +71,23 @@ public class FileService {
     public void save(){
 
     }
+
+    /**
+     * 使用 Gzip 压缩数据
+     * @param data 压缩前数据
+     * @return 压缩后的数据
+     */
     public byte[] GzipCompress(byte[] data) throws IOException {
         ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
         GZIPOutputStream gzipOutputStream = new GZIPOutputStream(byteArrayOutputStream);
         gzipOutputStream.write(data);
         return byteArrayOutputStream.toByteArray();
     }
+
+    /**
+     * @param compressedData 压缩后数据
+     * @return 解压后数据
+     */
     public byte[] GzipDecompress(byte[] compressedData) throws IOException {
         ByteArrayInputStream byteArrayInputStream = new ByteArrayInputStream(compressedData);
         ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
