@@ -2,17 +2,10 @@ package com.example.videoprocessor.service;
 
 
 import com.example.videoprocessor.Content.FileContent;
-import com.example.videoprocessor.pojo.Element;
+import com.example.videoprocessor.pojo.FrameWrapper;
 import org.bytedeco.ffmpeg.global.avcodec;
 import org.bytedeco.ffmpeg.global.avutil;
 import org.bytedeco.javacv.*;
-import org.bytedeco.opencv.global.opencv_core;
-
-import org.bytedeco.opencv.opencv_core.Mat;
-import org.bytedeco.opencv.opencv_core.MatVector;
-import org.bytedeco.opencv.opencv_core.Scalar;
-import org.opencv.imgcodecs.Imgcodecs;
-import org.opencv.core.Core;
 
 import java.io.File;
 import java.io.IOException;
@@ -42,8 +35,8 @@ public class VideoService {
         LocalDateTime now = LocalDateTime.now();
         ExecutorService executor = Executors.newFixedThreadPool(10);
         ExecutorService executorService = Executors.newSingleThreadExecutor();
-        processVideoToSetMessage(FileContent.VIDEO_PATH_PREFIX + "video.mp4", FileContent.VIDEO_PATH_PREFIX + "new4.mp4", executor, executorService);
-//        processVideoToGetMessage(FileContent.VIDEO_PATH_PREFIX + "new4.mp4", executor);
+        processVideoToSetMessage(FileContent.VIDEO_PATH_PREFIX + "video.mp4", FileContent.VIDEO_PATH_PREFIX + "new42.mkv", executor, executorService);
+//        processVideoToGetMessage(FileContent.VIDEO_PATH_PREFIX + "new4.mkv", executor);
         System.out.println(Duration.between(now, LocalDateTime.now()).toMillis());
     }
     public boolean separateFromFile(String videoPath, String outputDir, int frameRate) throws IOException, InterruptedException {
@@ -69,13 +62,6 @@ public class VideoService {
         System.out.println("Video separation completed successfully.");
         return true;
     }
-
-    /**
-     * @param imagePath 图片文件夹路径
-     * @param outputPath 输出视频路径，包含文件名
-     * @param frameRate 帧率
-     * @return 成功与否
-     */
     public boolean mergeImages(String imagePath, String outputPath, int frameRate) throws IOException, InterruptedException {
         File imageDirectory = new File(imagePath);
         if (!imageDirectory.exists() || !imageDirectory.isDirectory()) {
@@ -115,40 +101,51 @@ public class VideoService {
             // 创建 FFmpegFrameRecorder 实例
             try (FFmpegFrameRecorder recorder = new FFmpegFrameRecorder(outputPath, width, height)) {
                 recorder.setFormat(grabber.getFormat());
-                recorder.setVideoCodec(avcodec.AV_CODEC_ID_H264);
-                recorder.setFrameRate(grabber.getFrameRate());
-                recorder.setPixelFormat(avutil.AV_PIX_FMT_YUV420P); // AV_PIX_FMT_YUV420P
+                recorder.setVideoCodec(avcodec.AV_CODEC_ID_HUFFYUV);
+                System.out.println(grabber.getFrameRate());
+                recorder.setFrameRate(60);
+                recorder.setPixelFormat(avutil.AV_PIX_FMT_RGB24);
+                recorder.setVideoOption("fmt", "rgb24");
+//                recorder.setPixelFormat(avutil.AV_PIX_FMT_YUV420P); // AV_PIX_FMT_YUV420P
                 recorder.setFrameNumber(grabber.getLengthInFrames());
 //                recorder.setVideoOption("preset", "ultrafast");
 //                recorder.setVideoOption("crf", "20");
-                recorder.setVideoBitrate(20000); // 比特率
-                recorder.start();
-                PriorityBlockingQueue<Element> processedFrames = new PriorityBlockingQueue<>();
+                recorder.setVideoBitrate(20000000); // 比特率
+                recorder.start();  // 启动录制器
+
+                PriorityBlockingQueue<FrameWrapper> processedFrames = new PriorityBlockingQueue<>();
                 AtomicInteger completedFrameCount = new AtomicInteger(0);
+                AtomicInteger completedFrameCount2 = new AtomicInteger(0);
+                executorService.submit(() -> {
+                    while (processedFrames.size() < 30) {
+                        try {
+                            Thread.sleep(10);
+                        } catch (InterruptedException e) {
+                            throw new RuntimeException(e);
+                        }
+                    } // 等待排序
+                    while (!processedFrames.isEmpty()) {
+                        // 当持续有任务添加到队列时，记录完成的帧数
+                        try {
+                            Frame frame = processedFrames.take().frame;
+                            recorder.record(frame);
+                            completedFrameCount2.incrementAndGet();
+                        } catch (FFmpegFrameRecorder.Exception | InterruptedException e) {
+                            throw new RuntimeException(e);
+                        }
+                    }
+                });
                 // 遍历每一帧
                 while (true) {
                     Frame grabbedFrame = grabber.grab();
                     if (grabbedFrame == null) break;
+
                     Frame localFrame = grabbedFrame.clone(); // 克隆帧以避免并发问题
                     executor.submit(() -> {
-                        setMessagePerFrameYUV(localFrame, width, height);
-                        processedFrames.put(new Element(localFrame));
+                        setMessagePerFrameRGB(localFrame, width, height);
+                        processedFrames.put(new FrameWrapper(localFrame));
                         completedFrameCount.incrementAndGet();
                         System.out.println("Processing frame: " + localFrame.timestamp);
-                    });
-                    executorService.submit(() -> {
-                        while (processedFrames.size() < 100 && !executor.isTerminated()) {
-                            try {
-                                Thread.sleep(10);
-                            } catch (InterruptedException e) {
-                                throw new RuntimeException(e);
-                            }
-                        }
-                        try {
-                            recorder.record(processedFrames.take().frame);
-                        } catch (FFmpegFrameRecorder.Exception | InterruptedException e) {
-                            throw new RuntimeException(e);
-                        }
                     });
                 }
                 executor.shutdown();
@@ -168,7 +165,8 @@ public class VideoService {
                 }
                 recorder.stop();recorder.release();
                 grabber.stop();grabber.release();
-                System.out.println("视频处理完成，共处理了 " + completedFrameCount.get() + " 帧");
+                System.out.println("视频处理完成，共处理了 " + completedFrameCount.get() + " 帧" + "收集了" + completedFrameCount2.get() + " 帧");
+
             }
         }
     }
@@ -185,7 +183,7 @@ public class VideoService {
                 if (grabbedFrame == null) break;
                 Frame localFrame = grabbedFrame.clone(); // 克隆帧以避免并发问题
                 executor.submit(() -> {
-                    getMessagePerFrameYUV(localFrame, width, height);
+                    getMessagePerFrameRGB(localFrame, width, height);
                     System.out.println("Processing frame: " + localFrame.timestamp);
                 });
             }
@@ -271,6 +269,8 @@ public class VideoService {
             }
         }
     }
+
+
 
 
 }
